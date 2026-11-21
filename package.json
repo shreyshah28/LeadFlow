@@ -1,0 +1,13 @@
+{
+  "name": "leadflow-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix LeadFlow/frontend run dev",
+    "build": "npm --prefix LeadFlow/frontend run build",
+    "preview": "npm --prefix LeadFlow/frontend run preview"
+  },
+  "dependencies": {
+    "lucide-react": "^1.77.0"
+  }
+}
