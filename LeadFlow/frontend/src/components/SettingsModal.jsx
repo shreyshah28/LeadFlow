@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { User, Bell, Database, RotateCcw, X, Check } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { User, Bell, Database, RotateCcw, X, Check, Mail, Send, AlertCircle, Clock, ShieldCheck, CheckCircle2, Loader2 } from 'lucide-react';
+import { api } from '../services/api';
 
 export default function SettingsModal({
   isOpen,
@@ -14,6 +15,45 @@ export default function SettingsModal({
   const [email, setEmail] = useState(userProfile?.email || 'alex.morgan@leadflow.demo');
   const [emailAlerts, setEmailAlerts] = useState(true);
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  // Email status & test email states
+  const [emailStatus, setEmailStatus] = useState(null);
+  const [isSendingTest, setIsSendingTest] = useState(false);
+  const [testEmailFeedback, setTestEmailFeedback] = useState(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let isMounted = true;
+    api.getEmailStatus()
+      .then((status) => {
+        if (isMounted && status) setEmailStatus(status);
+      })
+      .catch((err) => {
+        console.warn('Failed to load email status:', err);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen]);
+
+  const handleSendTestEmail = async () => {
+    setIsSendingTest(true);
+    setTestEmailFeedback(null);
+    try {
+      const res = await api.sendTestEmail();
+      setTestEmailFeedback({
+        type: 'success',
+        text: res.message || 'Test email sent successfully! Please check administrator inbox.'
+      });
+    } catch (err) {
+      setTestEmailFeedback({
+        type: 'error',
+        text: err.message || 'Failed to send test email. Please check server SMTP configuration.'
+      });
+    } finally {
+      setIsSendingTest(false);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -140,6 +180,99 @@ export default function SettingsModal({
                   className="toggle-checkbox"
                 />
               </label>
+            </div>
+          </div>
+
+          {/* Daily Follow-up Email (Internship Feature) */}
+          <div className="settings-section">
+            <div className="section-title-row">
+              <Mail size={16} className="section-icon" />
+              <h3 className="section-heading">Daily Follow-up Email</h3>
+            </div>
+
+            <p className="text-muted text-sm mb-3">
+              Automated morning briefing sent to administrator with follow-ups scheduled for today and overdue leads.
+            </p>
+
+            <div className="email-config-card">
+              <div className="email-status-top">
+                <div className="email-pill-container">
+                  <span
+                    className={`email-badge ${
+                      emailStatus?.enabled && emailStatus?.configured
+                        ? 'email-badge-active'
+                        : emailStatus?.configured
+                        ? 'email-badge-disabled'
+                        : 'email-badge-unconfigured'
+                    }`}
+                  >
+                    <span className="email-status-indicator"></span>
+                    {emailStatus?.enabled && emailStatus?.configured
+                      ? 'Daily Dispatch Active'
+                      : emailStatus?.configured
+                      ? 'Dispatch Disabled'
+                      : 'SMTP Not Configured'}
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  className="btn btn-outline-primary btn-sm test-email-btn"
+                  onClick={handleSendTestEmail}
+                  disabled={isSendingTest || !emailStatus?.configured}
+                  title={
+                    !emailStatus?.configured
+                      ? 'Configure SMTP credentials in backend environment to enable test email.'
+                      : 'Send a live test email to administrator inbox.'
+                  }
+                >
+                  {isSendingTest ? (
+                    <>
+                      <Loader2 size={13} className="spin-icon" />
+                      <span>Sending...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send size={13} />
+                      <span>Send Test Email</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              <div className="email-meta-grid">
+                <div className="email-meta-row">
+                  <span className="email-meta-label">Recipient</span>
+                  <span className="email-meta-value">{emailStatus?.recipient_masked || 'Not configured'}</span>
+                </div>
+                <div className="email-meta-row">
+                  <span className="email-meta-label">Scheduled Time</span>
+                  <span className="email-meta-value">
+                    <Clock size={12} className="meta-icon" /> {emailStatus?.scheduled_time || '8:00 AM Asia/Kolkata'}
+                  </span>
+                </div>
+                <div className="email-meta-row">
+                  <span className="email-meta-label">Timezone</span>
+                  <span className="email-meta-value">{emailStatus?.timezone || 'Asia/Kolkata'}</span>
+                </div>
+                <div className="email-meta-row">
+                  <span className="email-meta-label">Duplicate Prevention</span>
+                  <span className="email-meta-value">
+                    <ShieldCheck size={12} className="meta-icon" /> {emailStatus?.duplicate_prevention || 'Enabled (1 per calendar day)'}
+                  </span>
+                </div>
+              </div>
+
+              {testEmailFeedback && (
+                <div className={`test-feedback-box ${testEmailFeedback.type}`}>
+                  {testEmailFeedback.type === 'success' ? (
+                    <CheckCircle2 size={15} className="feedback-icon" />
+                  ) : (
+                    <AlertCircle size={15} className="feedback-icon" />
+                  )}
+                  <span className="feedback-text">{testEmailFeedback.text}</span>
+                </div>
+              )}
             </div>
           </div>
 

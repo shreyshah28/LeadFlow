@@ -152,5 +152,28 @@ export const api = {
       method: 'POST'
     });
     return handleResponse(res);
+  },
+
+  /**
+   * Get public daily follow-up email configuration status
+   */
+  async getEmailStatus() {
+    try {
+      const res = await fetch(`${API_BASE_URL}/email/status`);
+      return await handleResponse(res);
+    } catch (err) {
+      console.warn('Failed to fetch email status:', err.message);
+      return null;
+    }
+  },
+
+  /**
+   * Send test email to verify SMTP configuration
+   */
+  async sendTestEmail() {
+    const res = await fetch(`${API_BASE_URL}/email/send-test`, {
+      method: 'POST'
+    });
+    return handleResponse(res);
   }
 };

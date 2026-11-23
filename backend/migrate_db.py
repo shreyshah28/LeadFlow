@@ -50,6 +50,23 @@ def run_migration(db_path: str = None) -> bool:
         else:
             print("[Migration] 'ix_leads_email' already exists.")
 
+        # 5. Ensure daily_email_logs table exists
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS daily_email_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                delivery_date VARCHAR(50) NOT NULL UNIQUE,
+                recipient VARCHAR(255) NOT NULL,
+                status VARCHAR(50) NOT NULL DEFAULT 'SUCCESS',
+                due_today_count INTEGER NOT NULL DEFAULT 0,
+                overdue_count INTEGER NOT NULL DEFAULT 0,
+                sent_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                error_message TEXT
+            )
+        """)
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_daily_email_logs_delivery_date ON daily_email_logs (delivery_date)")
+        c.execute("CREATE INDEX IF NOT EXISTS ix_daily_email_logs_status ON daily_email_logs (status)")
+        print("[Migration] Verified 'daily_email_logs' table and indices.")
+
         # 5. Commit changes
         conn.commit()
 

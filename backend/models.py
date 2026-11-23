@@ -41,3 +41,33 @@ class Lead(Base):
             "updated_at": updated_iso,
             "updatedAt": updated_iso
         }
+
+class DailyEmailLog(Base):
+    __tablename__ = "daily_email_logs"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    delivery_date = Column(String(50), nullable=False, unique=True, index=True)  # YYYY-MM-DD
+    recipient = Column(String(255), nullable=False)
+    status = Column(String(50), nullable=False, default="SUCCESS", index=True)  # SUCCESS or FAILED
+    due_today_count = Column(Integer, nullable=False, default=0)
+    overdue_count = Column(Integer, nullable=False, default=0)
+    sent_at = Column(DateTime, default=datetime.utcnow)
+    error_message = Column(Text, nullable=True)
+
+    def to_dict(self):
+        sent_iso = self.sent_at.isoformat() if self.sent_at else None
+        return {
+            "id": self.id,
+            "delivery_date": self.delivery_date,
+            "deliveryDate": self.delivery_date,
+            "recipient": self.recipient,
+            "status": self.status,
+            "due_today_count": self.due_today_count,
+            "dueTodayCount": self.due_today_count,
+            "overdue_count": self.overdue_count,
+            "overdueCount": self.overdue_count,
+            "sent_at": sent_iso,
+            "sentAt": sent_iso,
+            "error_message": self.error_message,
+            "errorMessage": self.error_message
+        }

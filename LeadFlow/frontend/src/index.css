@@ -2027,6 +2027,149 @@ textarea {
 }
 
 /* ==========================================================================
+   Daily Follow-up Email Settings Styles
+   ========================================================================== */
+.email-config-card {
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+  background-color: var(--bg-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.email-status-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.email-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.email-badge-active {
+  background-color: #DDF5EA;
+  color: #0D9168;
+  border: 1px solid #A9DEC8;
+}
+
+.email-badge-disabled {
+  background-color: #FEF3C7;
+  color: #B45309;
+  border: 1px solid #FDE68A;
+}
+
+.email-badge-unconfigured {
+  background-color: #F1F5F9;
+  color: #64748B;
+  border: 1px solid #CBD5E1;
+}
+
+.email-status-indicator {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: currentColor;
+}
+
+.test-email-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  padding: 6px 12px;
+}
+
+.email-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px 16px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.email-meta-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.email-meta-label {
+  font-size: 0.73rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.email-meta-value {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-main);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.meta-icon {
+  color: var(--primary);
+}
+
+.test-feedback-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.test-feedback-box.success {
+  background-color: #DDF5EA;
+  border: 1px solid #A9DEC8;
+  color: #0D9168;
+}
+
+.test-feedback-box.error {
+  background-color: #FEF2F2;
+  border: 1px solid #FECACA;
+  color: #B91C1C;
+}
+
+.feedback-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.feedback-text {
+  flex: 1;
+}
+
+.spin-icon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ==========================================================================
    Toast Notification System
    ========================================================================== */
 .toast-notification {

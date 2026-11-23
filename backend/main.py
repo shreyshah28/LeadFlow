@@ -12,7 +12,7 @@ from datetime import datetime, date, timedelta
 from typing import List, Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Query
+from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, desc, asc, text
@@ -22,6 +22,7 @@ import schemas
 import database
 from database import engine, get_db, SessionLocal, Base, is_sqlite
 import migrate_db
+import email_service
 
 def get_relative_date(offset_days: int) -> str:
     target = date.today() + timedelta(days=offset_days)
@@ -712,6 +713,75 @@ def reset_sample_leads_endpoint(db: Session = Depends(get_db)):
     seed_sample_leads(db)
     new_count = db.query(models.Lead).count()
     return {"message": "Database reset to initial sample leads successfully", "count": new_count}
+
+# -----------------------------------------------------------------------------
+# Email / Notifications Endpoints
+# -----------------------------------------------------------------------------
+
+@app.get("/api/email/status")
+def get_email_status_endpoint():
+    """
+    Returns public, safe email configuration status for the UI.
+    Never exposes passwords, tokens, or credentials.
+    """
+    return email_service.get_safe_email_status()
+
+@app.post("/api/email/send-test")
+def send_test_email_endpoint():
+    """
+    Sends a test email to the configured administrator address (FOLLOWUP_EMAIL_TO)
+    to verify SMTP configuration. Does NOT record into daily_email_logs.
+    """
+    result = email_service.send_test_email()
+    if result.get("status") == "failed":
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=result.get("error", "Failed to deliver test email.")
+        )
+    return result
+
+@app.post("/api/cron/daily-followup")
+def cron_daily_followup_endpoint(
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Protected cron endpoint executed daily at 8:00 AM Asia/Kolkata by external scheduler.
+    Requires header: Authorization: Bearer <CRON_SECRET>
+    Executes idempotently and records delivery status into daily_email_logs.
+    """
+    config = email_service.get_email_config()
+    expected_secret = config.get("cron_secret", "")
+
+    if not expected_secret:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Cron secret is not configured on the server (CRON_SECRET)."
+        )
+
+    if not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing Authorization header."
+        )
+
+    parts = authorization.strip().split()
+    token = parts[1] if (len(parts) == 2 and parts[0].lower() == "bearer") else parts[0]
+
+    if token != expected_secret:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid cron authorization token."
+        )
+
+    result = email_service.send_daily_followup_email(db)
+    if result.get("status") == "failed":
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=result.get("error", "Daily follow-up email delivery failed.")
+        )
+
+    return result
 
 if __name__ == "__main__":
     import uvicorn
