@@ -202,44 +202,36 @@ export default function ImportCSVModal({ isOpen, onClose, onImportSuccess }) {
         </div>
 
         <div className="modal-body-p">
+          {/* File Input: resetting value in onClick ensures re-selecting same file fires onChange */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv"
+            style={{ display: 'none' }}
+            onClick={(e) => {
+              e.target.value = '';
+            }}
+            onChange={handleFileChange}
+          />
+
           {!result ? (
             <>
-              {/* Dropzone */}
-              <div
-                className={`csv-dropzone ${selectedFile ? 'has-file' : ''}`}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={handleDrop}
-                onClick={() => {
-                  if (!isUploading) {
-                    fileInputRef.current?.click();
-                  }
-                }}
-              >
-                {/* File Input: resetting value in onClick ensures re-selecting same file fires onChange */}
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".csv"
-                  style={{ display: 'none' }}
-                  onClick={(e) => {
-                    e.target.value = '';
+              {/* Dropzone (shown when no file is selected) */}
+              {!selectedFile ? (
+                <div
+                  className="csv-dropzone"
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={handleDrop}
+                  onClick={() => {
+                    if (!isUploading) {
+                      fileInputRef.current?.click();
+                    }
                   }}
-                  onChange={handleFileChange}
-                />
-                <div className="dropzone-content">
-                  <div className="dropzone-icon-box">
-                    {selectedFile ? <FileText size={28} /> : <Upload size={28} />}
-                  </div>
-                  {selectedFile ? (
-                    <div className="dropzone-file-info">
-                      <span className="file-name">{selectedFile.name}</span>
-                      <span className="file-size">
-                        {(selectedFile.size / 1024).toFixed(1)} KB
-                        {previewData?.totalRowsEstimate !== undefined &&
-                          ` • ~${previewData.totalRowsEstimate} rows detected`}
-                      </span>
+                >
+                  <div className="dropzone-content">
+                    <div className="dropzone-icon-box">
+                      <Upload size={28} />
                     </div>
-                  ) : (
                     <div className="dropzone-prompts">
                       <p className="dropzone-main-text">
                         <strong>Click to browse</strong> or drag & drop a CSV file here
@@ -248,49 +240,70 @@ export default function ImportCSVModal({ isOpen, onClose, onImportSuccess }) {
                         Supports LeadFlow export format or standard CRM CSVs
                       </p>
                     </div>
-                  )}
+                  </div>
                 </div>
-              </div>
-
-              {/* CSV Preview Table when a valid file is parsed */}
-              {previewData && previewData.headers && previewData.headers.length > 0 && (
-                <div className="csv-preview-box">
-                  <div className="csv-preview-header">
-                    <span>
-                      Detected Columns: {previewData.headers.length} | First{' '}
-                      {previewData.previewRows.length} Rows Preview
-                    </span>
+              ) : (
+                /* Simple confirmation card with selected filename and Import button instead of preview table */
+                <div
+                  className="csv-confirmation-card"
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={handleDrop}
+                >
+                  <div className="csv-confirmation-header">
+                    <div className="csv-confirmation-file-info">
+                      <div className="csv-confirmation-icon-box">
+                        <FileText size={24} />
+                      </div>
+                      <div className="csv-confirmation-text">
+                        <span className="csv-confirmation-filename" title={selectedFile.name}>
+                          {selectedFile.name}
+                        </span>
+                        <div className="csv-confirmation-meta">
+                          <span>{(selectedFile.size / 1024).toFixed(1)} KB</span>
+                          {previewData?.totalRowsEstimate !== undefined && (
+                            <span> • ~{previewData.totalRowsEstimate} rows detected</span>
+                          )}
+                          {previewData?.hasRequiredCols && (
+                            <span className="csv-confirmation-badge">
+                              <CheckCircle2 size={12} /> Ready to import
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                     <button
                       type="button"
                       className="btn btn-secondary btn-sm"
-                      style={{ padding: '2px 8px', fontSize: '0.72rem' }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        resetAll();
-                      }}
+                      onClick={resetAll}
+                      disabled={isUploading}
                     >
-                      Clear File
+                      <RotateCcw size={13} />
+                      <span>Change File</span>
                     </button>
                   </div>
-                  <div className="csv-preview-table-wrapper">
-                    <table className="csv-preview-table">
-                      <thead>
-                        <tr>
-                          {previewData.headers.map((h, i) => (
-                            <th key={i}>{h || `Col ${i + 1}`}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {previewData.previewRows.map((row, rIdx) => (
-                          <tr key={rIdx}>
-                            {previewData.headers.map((_, cIdx) => (
-                              <td key={cIdx}>{row[cIdx] || '—'}</td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+
+                  <div className="csv-confirmation-body">
+                    <p className="csv-confirmation-desc">
+                      CSV file selected and validated. Click <strong>Import Leads</strong> to proceed.
+                    </p>
+                    <button
+                      type="button"
+                      className="btn btn-primary csv-confirmation-import-btn"
+                      onClick={handleUpload}
+                      disabled={isUploading}
+                    >
+                      {isUploading ? (
+                        <>
+                          <Loader2 size={16} className="spin-icon" />
+                          <span>Importing...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Upload size={16} />
+                          <span>Import Leads</span>
+                        </>
+                      )}
+                    </button>
                   </div>
                 </div>
               )}

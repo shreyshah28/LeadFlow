@@ -223,6 +223,8 @@ allowed_origins = [
     "http://127.0.0.1:5173",
     "http://127.0.0.1:3000",
     "http://127.0.0.1:4173",
+    "http://localhost:5178",
+"http://127.0.0.1:5178",
 ]
 env_origins = os.environ.get("ALLOWED_ORIGINS")
 if env_origins:

@@ -88,9 +88,14 @@
   padding: 0;
 }
 
-html,
+html {
+  min-height: 100%;
+  scroll-behavior: smooth;
+}
+
 body {
-  height: 100%;
+  min-height: 100%;
+  height: auto;
   font-family: var(--font-sans);
   background-color: var(--bg-app);
   color: var(--text-main);
@@ -98,6 +103,8 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 /* Ensure all interactive and form controls inherit the primary font */
@@ -444,12 +451,13 @@ textarea {
    Main Content Area & Header
    ========================================================================== */
 .main-content-area {
-  flex: 1;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   min-width: 0;
   /* prevents flex child overflow */
   min-height: 100vh;
+  height: auto;
   background-color: var(--bg-app);
 }
 
@@ -655,7 +663,7 @@ textarea {
    Content Workspace & Views
    ========================================================================== */
 .content-workspace {
-  padding: 24px 28px 40px;
+  padding: 24px 28px 64px;
   max-width: 1440px;
   width: 100%;
   margin: 0 auto;
@@ -1174,7 +1182,7 @@ textarea {
    Leads Table (Requirements 4, 5, 7, 10)
    ========================================================================== */
 .leads-table-container {
-  overflow: hidden;
+  overflow: visible;
   animation: fadeIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
@@ -1184,6 +1192,8 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  border-top-left-radius: var(--radius-lg);
+  border-top-right-radius: var(--radius-lg);
 }
 
 .status-tabs-row {
@@ -1387,12 +1397,30 @@ textarea {
 .table-responsive {
   width: 100%;
   overflow-x: auto;
+  overflow-y: clip;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
+  -webkit-overflow-scrolling: touch;
+  border-bottom-left-radius: var(--radius-lg);
+  border-bottom-right-radius: var(--radius-lg);
 }
 
 .leads-table {
   width: 100%;
   border-collapse: collapse;
   text-align: left;
+}
+
+.leads-table tbody tr:last-child td:first-child {
+  border-bottom-left-radius: var(--radius-lg);
+}
+
+.leads-table tbody tr:last-child td:last-child {
+  border-bottom-right-radius: var(--radius-lg);
+}
+
+.leads-table tbody tr:last-child td {
+  border-bottom: none;
 }
 
 .leads-table thead th {
@@ -2641,7 +2669,115 @@ textarea {
   border: 1px solid #fecaca;
 }
 
-/* CSV Preview Table */
+/* CSV File Confirmation Card (replaces preview table) */
+.csv-confirmation-card {
+  margin-bottom: 16px;
+  background-color: var(--bg-surface);
+  border: 1.5px solid var(--accent-border, #A9DEC8);
+  border-radius: var(--radius-lg);
+  padding: 16px 20px;
+  background: linear-gradient(180deg, #f7fcf9 0%, #ffffff 100%);
+  box-shadow: 0 1px 3px rgba(11, 43, 31, 0.05);
+  transition: all 0.2s ease;
+}
+
+.csv-confirmation-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.csv-confirmation-file-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.csv-confirmation-icon-box {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-md);
+  background-color: var(--primary-light);
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.csv-confirmation-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.csv-confirmation-filename {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+
+.csv-confirmation-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.csv-confirmation-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background-color: var(--primary-light);
+  color: var(--primary-hover);
+  padding: 1px 7px;
+  border-radius: 9999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.csv-confirmation-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 14px;
+}
+
+.csv-confirmation-desc {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.csv-confirmation-import-btn {
+  flex-shrink: 0;
+}
+
+@media (max-width: 540px) {
+  .csv-confirmation-body {
+    flex-direction: column;
+    align-items: stretch;
+    text-align: center;
+  }
+  .csv-confirmation-import-btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+/* CSV Preview Table (legacy classes retained for backward compatibility) */
 .csv-preview-box {
   margin-top: 14px;
   margin-bottom: 16px;
