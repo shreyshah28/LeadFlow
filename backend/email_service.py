@@ -1,15 +1,12 @@
 import os
-import smtplib
-import socket
 import logging
 import html
 from datetime import datetime, timezone, timedelta
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, and_
 from sqlalchemy.exc import IntegrityError
+import httpx
 
 import models
 
@@ -18,25 +15,19 @@ logger = logging.getLogger("leadflow.email")
 # Fallback fixed offset for Asia/Kolkata (UTC +05:30)
 KOLKATA_FALLBACK_TZ = timezone(timedelta(hours=5, minutes=30), name="Asia/Kolkata")
 
+# Resend HTTPS API endpoint
+RESEND_API_URL = "https://api.resend.com/emails"
+
 def get_email_config() -> Dict[str, Any]:
     """
-    Loads email configuration safely from environment variables.
+    Loads email configuration safely from environment variables for Resend API delivery.
     """
-    port_str = os.environ.get("SMTP_PORT", "587").strip()
-    try:
-        smtp_port = int(port_str)
-    except ValueError:
-        smtp_port = 587
-
     enabled_raw = os.environ.get("DAILY_FOLLOWUP_EMAIL_ENABLED", "false").strip().lower()
     is_enabled = enabled_raw in ("true", "1", "yes", "on")
 
     return {
-        "smtp_host": os.environ.get("SMTP_HOST", "").strip(),
-        "smtp_port": smtp_port,
-        "smtp_username": os.environ.get("SMTP_USERNAME", "").strip(),
-        "smtp_password": os.environ.get("SMTP_PASSWORD", "").strip(),
-        "email_from": os.environ.get("EMAIL_FROM", "").strip() or os.environ.get("SMTP_USERNAME", "").strip() or "LeadFlow CRM <leadflow@internal>",
+        "api_key": os.environ.get("RESEND_API_KEY", "").strip(),
+        "email_from": os.environ.get("EMAIL_FROM", "").strip() or "LeadFlow CRM <onboarding@resend.dev>",
         "email_to": os.environ.get("FOLLOWUP_EMAIL_TO", "").strip(),
         "enabled": is_enabled,
         "timezone": os.environ.get("DAILY_FOLLOWUP_TIMEZONE", "Asia/Kolkata").strip() or "Asia/Kolkata",
@@ -45,10 +36,10 @@ def get_email_config() -> Dict[str, Any]:
 
 def is_email_configured() -> bool:
     """
-    Checks whether all essential SMTP credentials and recipient are configured.
+    Checks whether all essential Resend credentials and recipient are configured.
     """
     cfg = get_email_config()
-    return bool(cfg["smtp_host"] and cfg["smtp_username"] and cfg["smtp_password"] and cfg["email_to"])
+    return bool(cfg["api_key"] and cfg["email_to"])
 
 def mask_email(email_str: str) -> str:
     """
@@ -76,12 +67,14 @@ def get_safe_email_status() -> Dict[str, Any]:
     return {
         "enabled": cfg["enabled"],
         "configured": configured,
+        "provider": "Resend HTTPS API",
         "recipient": masked,
         "recipient_masked": masked,
+        "sender": cfg["email_from"],
         "timezone": cfg["timezone"],
         "scheduled_time": "8:00 AM Asia/Kolkata",
         "duplicate_prevention": "Enabled (1 per calendar day)",
-        "smtp_host": cfg["smtp_host"] or "Not configured"
+        "api_endpoint": RESEND_API_URL
     }
 
 def get_current_time_in_tz(tz_name: str = "Asia/Kolkata") -> datetime:
@@ -109,14 +102,14 @@ def get_current_date_strings(tz_name: str = "Asia/Kolkata") -> Tuple[str, str]:
 
 def sanitize_error_string(err_str: str) -> str:
     """
-    Strips passwords and sensitive secrets from error strings before logging or returning to API clients.
+    Strips API keys and sensitive secrets from error strings before logging or returning to API clients.
     """
     if not err_str:
         return ""
     cfg = get_email_config()
     secrets_to_redact = []
-    if cfg["smtp_password"]:
-        secrets_to_redact.append(cfg["smtp_password"])
+    if cfg["api_key"]:
+        secrets_to_redact.append(cfg["api_key"])
     if cfg["cron_secret"]:
         secrets_to_redact.append(cfg["cron_secret"])
 
@@ -389,7 +382,7 @@ def render_followup_email(
               <tr>
                 <td style="background-color: #F4F8F5; border-top: 1px solid #E2EBE5; padding: 18px 28px; text-align: center;">
                   <p style="margin: 0; font-size: 12px; color: #71867C;">
-                    Sent automatically by <strong>LeadFlow</strong> Follow-up Automation.
+                    Sent automatically by <strong>LeadFlow</strong> Follow-up Automation via Resend HTTPS API.
                   </p>
                   <p style="margin: 4px 0 0; font-size: 11px; color: #8FA499;">
                     Configured for <strong>Asia/Kolkata (IST)</strong> delivery at 8:00 AM.
@@ -408,72 +401,63 @@ def render_followup_email(
 
 def send_email(subject: str, html_body: str, text_body: str, to_email: str) -> Dict[str, Any]:
     """
-    Sends multi-part email using configured SMTP credentials with timeouts and TLS.
-    Strictly enforces STARTTLS on port 587 and SSL on port 465.
-    Never transmits credentials over an unencrypted connection.
+    Sends multi-part email using Resend HTTPS REST API.
+    Never transmits API keys or secrets in unencrypted or raw error logs.
     """
     cfg = get_email_config()
     if not is_email_configured():
-        err_msg = "SMTP configuration is incomplete. Missing host, username, password, or recipient."
+        err_msg = "Resend configuration is incomplete. Missing RESEND_API_KEY or FOLLOWUP_EMAIL_TO."
         logger.warning(err_msg)
         return {"success": False, "error": err_msg}
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = cfg["email_from"]
-    msg["To"] = to_email
-    msg["Date"] = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
+    headers = {
+        "Authorization": f"Bearer {cfg['api_key']}",
+        "Content-Type": "application/json",
+        "User-Agent": "LeadFlow-CRM/1.0"
+    }
 
-    part1 = MIMEText(text_body, "plain", "utf-8")
-    part2 = MIMEText(html_body, "html", "utf-8")
-    msg.attach(part1)
-    msg.attach(part2)
-
-    host = cfg["smtp_host"]
-    port = cfg["smtp_port"]
-    user = cfg["smtp_username"]
-    pwd = cfg["smtp_password"]
+    payload = {
+        "from": cfg["email_from"],
+        "to": [to_email],
+        "subject": subject,
+        "html": html_body,
+        "text": text_body
+    }
 
     try:
-        if port == 465:
-            # SSL Connection (port 465)
-            with smtplib.SMTP_SSL(host, port, timeout=15) as server:
-                server.login(user, pwd)
-                server.send_message(msg)
+        with httpx.Client(timeout=15.0) as client:
+            response = client.post(RESEND_API_URL, headers=headers, json=payload)
+
+        if response.status_code in (200, 201):
+            res_data = response.json()
+            email_id = res_data.get("id", "unknown")
+            logger.info(f"Email successfully dispatched via Resend to {to_email}. Resend ID: {email_id}")
+            return {"success": True, "recipient": to_email, "id": email_id}
         else:
-            # STARTTLS Connection (port 587 or standard SMTP ports)
-            with smtplib.SMTP(host, port, timeout=15) as server:
-                server.ehlo()
-                if not server.has_extn("STARTTLS"):
-                    err_str = f"SMTP server {host}:{port} does not support STARTTLS. Refusing unencrypted transmission."
-                    logger.error(err_str)
-                    return {"success": False, "error": err_str}
-                server.starttls()
-                server.ehlo()
-                server.login(user, pwd)
-                server.send_message(msg)
+            try:
+                err_json = response.json()
+                raw_err = err_json.get("message") or err_json.get("error") or response.text
+            except Exception:
+                raw_err = response.text or f"HTTP status {response.status_code}"
 
-        logger.info(f"Email successfully sent to {to_email} with subject: '{subject}'")
-        return {"success": True, "recipient": to_email}
+            safe_err = sanitize_error_string(f"Resend API error ({response.status_code}): {raw_err}")
+            logger.error(f"Failed to send email via Resend to {to_email}: {safe_err}")
+            return {"success": False, "error": safe_err, "status_code": response.status_code}
 
-    except (socket.timeout, TimeoutError):
-        err_str = f"SMTP connection timed out after 15 seconds to {host}:{port}"
-        logger.error(err_str)
-        return {"success": False, "error": err_str}
-    except smtplib.SMTPAuthenticationError:
-        err_str = "SMTP Authentication failed: Invalid username or password (check Gmail App Password)"
+    except (httpx.TimeoutException, TimeoutError):
+        err_str = "Resend API connection timed out after 15 seconds."
         logger.error(err_str)
         return {"success": False, "error": err_str}
     except Exception as e:
         safe_exc = sanitize_error_string(f"{type(e).__name__}: {str(e)}")
-        err_str = f"Failed to send email via SMTP: {safe_exc}"
+        err_str = f"Failed to send email via Resend API: {safe_exc}"
         logger.error(err_str)
         return {"success": False, "error": err_str}
 
 def send_daily_followup_email(db: Session, force_date: Optional[str] = None) -> Dict[str, Any]:
     """
     Main routine executed daily to gather follow-ups, prevent duplicate delivery via
-    atomic database claim locking, and dispatch the summary email.
+    atomic database claim locking, and dispatch the summary email via Resend HTTPS API.
     Preserves retries for failed deliveries and prevents concurrent duplicate execution.
     """
     cfg = get_email_config()
@@ -486,10 +470,10 @@ def send_daily_followup_email(db: Session, force_date: Optional[str] = None) -> 
         }
 
     if not is_email_configured():
-        logger.warning("Daily follow-up email triggered but SMTP configuration is incomplete.")
+        logger.warning("Daily follow-up email triggered but Resend configuration is incomplete.")
         return {
             "status": "unconfigured",
-            "message": "SMTP configuration is incomplete. Check SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, and FOLLOWUP_EMAIL_TO."
+            "message": "Resend configuration is incomplete. Check RESEND_API_KEY and FOLLOWUP_EMAIL_TO."
         }
 
     # 1. Determine date in target timezone
@@ -647,7 +631,7 @@ def send_daily_followup_email(db: Session, force_date: Optional[str] = None) -> 
         subject = f"LeadFlow – Daily Follow-up Summary – {display_date}"
         html_body, text_body = render_followup_email(display_date, due_today_leads, overdue_leads)
 
-        # 5. Send Email
+        # 5. Send Email via Resend
         result = send_email(subject, html_body, text_body, recipient)
 
         if result["success"]:
@@ -667,10 +651,10 @@ def send_daily_followup_email(db: Session, force_date: Optional[str] = None) -> 
                 "due_today_count": len(due_today_leads),
                 "overdue_count": len(overdue_leads),
                 "recipient": recipient,
-                "message": f"Successfully sent daily follow-up email for {iso_date} to {recipient}."
+                "message": f"Successfully sent daily follow-up email for {iso_date} to {recipient} via Resend."
             }
         else:
-            safe_err = sanitize_error_string(result.get("error", "Unknown SMTP error"))
+            safe_err = sanitize_error_string(result.get("error", "Unknown Resend API error"))
             claim_log.status = "FAILED"
             claim_log.recipient = recipient
             claim_log.due_today_count = len(due_today_leads)
@@ -708,7 +692,7 @@ def send_daily_followup_email(db: Session, force_date: Optional[str] = None) -> 
 
 def send_test_email() -> Dict[str, Any]:
     """
-    Sends a test verification email to FOLLOWUP_EMAIL_TO.
+    Sends a test verification email to FOLLOWUP_EMAIL_TO via Resend HTTPS API.
     Does NOT mark daily email delivery as complete in daily_email_logs.
     All user-controlled dynamic fields are escaped.
     """
@@ -717,7 +701,7 @@ def send_test_email() -> Dict[str, Any]:
         return {
             "status": "failed",
             "success": False,
-            "error": "Cannot send test email: SMTP settings (host, user, password, recipient) are incomplete."
+            "error": "Cannot send test email: Resend settings (RESEND_API_KEY, FOLLOWUP_EMAIL_TO) are incomplete."
         }
 
     recipient = cfg["email_to"]
@@ -731,12 +715,13 @@ LEADFLOW - EMAIL CONFIGURATION TEST
 
 LeadFlow test email – Email configuration is working correctly.
 
-This test confirms that your SMTP settings are properly
-configured and able to deliver emails from LeadFlow.
+This test confirms that your Resend HTTPS API configuration is properly
+set up and able to deliver emails from LeadFlow.
 
 Details:
   - Timestamp: {display_dt}
-  - SMTP Host: {cfg['smtp_host']}:{cfg['smtp_port']}
+  - Provider: Resend HTTPS API
+  - Sender: {cfg['email_from']}
   - Recipient: {recipient}
   - Note: This test email does not mark your daily follow-up as sent.
 
@@ -745,7 +730,7 @@ LeadFlow CRM & Pipeline Tracker
 """
 
     safe_recipient = safe_html(recipient)
-    safe_host = safe_html(f"{cfg['smtp_host']}:{cfg['smtp_port']}")
+    safe_sender = safe_html(cfg['email_from'])
     safe_display_dt = safe_html(display_dt)
 
     html_body = f"""
@@ -772,7 +757,7 @@ LeadFlow CRM & Pipeline Tracker
               </p>
             </div>
             <p style="margin: 0 0 16px; font-size: 13px; line-height: 1.5; color: #3D5C49;">
-              This email was triggered manually from your LeadFlow Settings modal. Your SMTP credentials and external recipient settings have been verified.
+              This email was triggered manually from your LeadFlow Settings modal. Your Resend API key and recipient settings have been verified.
             </p>
             <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #EEF5F0; border-radius: 6px; padding: 12px 14px; font-size: 12px; color: #3D5C49;">
               <tr>
@@ -780,8 +765,12 @@ LeadFlow CRM & Pipeline Tracker
                 <td style="padding: 4px 0; color: #0B2B1F;">{safe_display_dt}</td>
               </tr>
               <tr>
-                <td style="padding: 4px 0;"><strong>SMTP Host:</strong></td>
-                <td style="padding: 4px 0; color: #0B2B1F;">{safe_host}</td>
+                <td style="padding: 4px 0;"><strong>Provider:</strong></td>
+                <td style="padding: 4px 0; color: #0B2B1F;">Resend HTTPS API</td>
+              </tr>
+              <tr>
+                <td style="padding: 4px 0;"><strong>Sender:</strong></td>
+                <td style="padding: 4px 0; color: #0B2B1F;">{safe_sender}</td>
               </tr>
               <tr>
                 <td style="padding: 4px 0;"><strong>Recipient:</strong></td>
@@ -815,5 +804,5 @@ LeadFlow CRM & Pipeline Tracker
         "success": False,
         "recipient": recipient,
         "error": res.get("error", "Failed to send test email."),
-        "message": f"Failed to send test email: {res.get('error', 'Unknown SMTP error')}"
+        "message": f"Failed to send test email: {res.get('error', 'Unknown Resend API error')}"
     }

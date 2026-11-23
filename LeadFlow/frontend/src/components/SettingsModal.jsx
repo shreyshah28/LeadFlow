@@ -48,7 +48,7 @@ export default function SettingsModal({
     } catch (err) {
       setTestEmailFeedback({
         type: 'error',
-        text: err.message || 'Failed to send test email. Please check server SMTP configuration.'
+        text: err.message || 'Failed to send test email. Please check server email configuration.'
       });
     } finally {
       setIsSendingTest(false);
@@ -211,7 +211,7 @@ export default function SettingsModal({
                       ? 'Daily Dispatch Active'
                       : emailStatus?.configured
                       ? 'Dispatch Disabled'
-                      : 'SMTP Not Configured'}
+                      : 'Not Configured'}
                   </span>
                 </div>
 
@@ -222,7 +222,7 @@ export default function SettingsModal({
                   disabled={isSendingTest || !emailStatus?.configured}
                   title={
                     !emailStatus?.configured
-                      ? 'Configure SMTP credentials in backend environment to enable test email.'
+                      ? 'Configure RESEND_API_KEY and recipient in backend environment to enable test email.'
                       : 'Send a live test email to administrator inbox.'
                   }
                 >

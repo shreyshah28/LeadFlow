@@ -1,6 +1,5 @@
 import os
 import sys
-import smtplib
 import unittest
 from datetime import datetime, date, timedelta
 from unittest.mock import patch, MagicMock
@@ -15,6 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
+import httpx
 
 import models
 from database import Base, get_db
@@ -63,14 +63,12 @@ class TestEmailService(unittest.TestCase):
     def test_recipient_privacy_no_raw_recipient(self):
         """
         Verify that get_safe_email_status() completely omits raw_recipient
-        and never leaks the full recipient email address.
+        and never leaks the full recipient email address or RESEND_API_KEY.
         """
         raw_admin_email = "administrator.confidential@enterprise-domain.com"
         with patch.dict(os.environ, {
-            "SMTP_HOST": "smtp.gmail.com",
-            "SMTP_PORT": "587",
-            "SMTP_USERNAME": "smtpuser@gmail.com",
-            "SMTP_PASSWORD": "secret-smtp-password-123",
+            "RESEND_API_KEY": "re_live_secret_key_123456789",
+            "EMAIL_FROM": "LeadFlow <onboarding@resend.dev>",
             "CRON_SECRET": "secret-cron-token-456",
             "FOLLOWUP_EMAIL_TO": raw_admin_email,
             "DAILY_FOLLOWUP_EMAIL_ENABLED": "true"
@@ -84,10 +82,13 @@ class TestEmailService(unittest.TestCase):
             self.assertEqual(status_data["recipient_masked"], "a***l@enterprise-domain.com")
             self.assertEqual(status_data["recipient"], "a***l@enterprise-domain.com")
 
-            # 3. Raw email, password, and cron secret must NEVER appear anywhere in serialized status
+            # 3. Provider must be Resend HTTPS API
+            self.assertEqual(status_data["provider"], "Resend HTTPS API")
+
+            # 4. Raw email, API key, and cron secret must NEVER appear anywhere in serialized status
             dumped = str(status_data)
             self.assertNotIn(raw_admin_email, dumped)
-            self.assertNotIn("secret-smtp-password-123", dumped)
+            self.assertNotIn("re_live_secret_key_123456789", dumped)
             self.assertNotIn("secret-cron-token-456", dumped)
 
     # -------------------------------------------------------------------------
@@ -131,7 +132,6 @@ class TestEmailService(unittest.TestCase):
         self.assertIn('&quot;&gt;&lt;script&gt;fetch', html_body)
 
         # 3. Verify attribute escaping on mailto href
-        # Double quotes must be escaped to &quot; preventing attribute breakout
         self.assertNotIn('href="mailto:malicious" onmouseover=', html_body)
         self.assertIn('href="mailto:malicious&quot; onmouseover=&quot;alert(2)&quot;', html_body)
 
@@ -153,118 +153,105 @@ class TestEmailService(unittest.TestCase):
         self.assertNotIn("OVERDUE FOLLOW-UPS", text_body)
 
     # -------------------------------------------------------------------------
-    # 3. SMTP Transport Security & STARTTLS Enforcement
+    # 3. Resend HTTPS API Delivery Tests
     # -------------------------------------------------------------------------
-    @patch("smtplib.SMTP")
-    def test_starttls_enforcement_success(self, mock_smtp_cls):
+    @patch("httpx.Client.post")
+    def test_resend_api_send_success(self, mock_post):
         """
-        When STARTTLS is supported on port 587, starttls() and login() should proceed.
+        Verify send_email dispatches HTTPS POST to https://api.resend.com/emails
+        with Bearer authorization, JSON payload, and handles 200 response.
         """
-        mock_server = MagicMock()
-        mock_server.has_extn.return_value = True  # Supports STARTTLS
-        mock_smtp_cls.return_value.__enter__.return_value = mock_server
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"id": "re_msg_abc123"}
+        mock_post.return_value = mock_response
 
         with patch.dict(os.environ, {
-            "SMTP_HOST": "smtp.example.com",
-            "SMTP_PORT": "587",
-            "SMTP_USERNAME": "myuser",
-            "SMTP_PASSWORD": "mypassword",
+            "RESEND_API_KEY": "re_test_key_xyz",
+            "EMAIL_FROM": "LeadFlow CRM <onboarding@resend.dev>",
             "FOLLOWUP_EMAIL_TO": "admin@example.com"
         }):
-            res = email_service.send_email("Subject", "<p>HTML</p>", "Text", "admin@example.com")
-            self.assertTrue(res["success"])
-            mock_server.starttls.assert_called_once()
-            mock_server.login.assert_called_once_with("myuser", "mypassword")
+            res = email_service.send_email(
+                subject="Test Subject",
+                html_body="<p>HTML</p>",
+                text_body="Text",
+                to_email="admin@example.com"
+            )
 
-    @patch("smtplib.SMTP")
-    def test_starttls_enforcement_refuses_unencrypted(self, mock_smtp_cls):
+            self.assertTrue(res["success"])
+            self.assertEqual(res["id"], "re_msg_abc123")
+            self.assertEqual(res["recipient"], "admin@example.com")
+
+            # Verify POST called with correct endpoint and headers
+            mock_post.assert_called_once()
+            call_args, call_kwargs = mock_post.call_args
+            self.assertEqual(call_args[0], "https://api.resend.com/emails")
+            self.assertEqual(call_kwargs["headers"]["Authorization"], "Bearer re_test_key_xyz")
+            self.assertEqual(call_kwargs["headers"]["Content-Type"], "application/json")
+            self.assertEqual(call_kwargs["json"]["from"], "LeadFlow CRM <onboarding@resend.dev>")
+            self.assertEqual(call_kwargs["json"]["to"], ["admin@example.com"])
+            self.assertEqual(call_kwargs["json"]["subject"], "Test Subject")
+
+    @patch("httpx.Client.post")
+    def test_resend_api_error_handling_and_secret_redaction(self, mock_post):
         """
-        If the SMTP server on port 587 does NOT support STARTTLS,
-        send_email must refuse to send and NEVER call server.login()!
+        Verify that Resend API error responses (e.g. 422 unverified domain, 401 invalid key)
+        are cleanly handled, descriptive error message returned, and API key never leaked.
         """
-        mock_server = MagicMock()
-        mock_server.has_extn.return_value = False  # No STARTTLS!
-        mock_smtp_cls.return_value.__enter__.return_value = mock_server
+        mock_response = MagicMock()
+        mock_response.status_code = 422
+        mock_response.json.return_value = {
+            "statusCode": 422,
+            "message": "You can only send testing emails to your own email address (user@example.com).",
+            "name": "validation_error"
+        }
+        mock_post.return_value = mock_response
+
+        secret_api_key = "re_confidential_api_token_999"
+        with patch.dict(os.environ, {
+            "RESEND_API_KEY": secret_api_key,
+            "EMAIL_FROM": "LeadFlow CRM <onboarding@resend.dev>",
+            "FOLLOWUP_EMAIL_TO": "unverified@external.com"
+        }):
+            res = email_service.send_email("Subject", "<p>HTML</p>", "Text", "unverified@external.com")
+            self.assertFalse(res["success"])
+            self.assertIn("only send testing emails to your own email address", res["error"])
+            self.assertNotIn(secret_api_key, res["error"])
+
+    @patch("httpx.Client.post")
+    def test_resend_api_timeout(self, mock_post):
+        """
+        Verify timeout exception produces clean error without crash.
+        """
+        mock_post.side_effect = httpx.TimeoutException("Connection timed out after 15s")
 
         with patch.dict(os.environ, {
-            "SMTP_HOST": "smtp.unencrypted.com",
-            "SMTP_PORT": "587",
-            "SMTP_USERNAME": "myuser",
-            "SMTP_PASSWORD": "supersecretpassword",
+            "RESEND_API_KEY": "re_key_123",
             "FOLLOWUP_EMAIL_TO": "admin@example.com"
         }):
             res = email_service.send_email("Subject", "<p>HTML</p>", "Text", "admin@example.com")
             self.assertFalse(res["success"])
-            self.assertIn("does not support STARTTLS", res["error"])
-            # CRITICAL: server.login() must NEVER be invoked without encryption!
-            mock_server.login.assert_not_called()
-            mock_server.send_message.assert_not_called()
-
-    @patch("smtplib.SMTP_SSL")
-    def test_smtp_ssl_used_on_port_465(self, mock_ssl_cls):
-        """
-        Port 465 must use SMTP_SSL directly.
-        """
-        mock_server = MagicMock()
-        mock_ssl_cls.return_value.__enter__.return_value = mock_server
-
-        with patch.dict(os.environ, {
-            "SMTP_HOST": "smtp.gmail.com",
-            "SMTP_PORT": "465",
-            "SMTP_USERNAME": "myuser",
-            "SMTP_PASSWORD": "mypassword",
-            "FOLLOWUP_EMAIL_TO": "admin@example.com"
-        }):
-            res = email_service.send_email("Subject", "<p>HTML</p>", "Text", "admin@example.com")
-            self.assertTrue(res["success"])
-            mock_ssl_cls.assert_called_once()
-            mock_server.login.assert_called_once()
-
-    # -------------------------------------------------------------------------
-    # 4. Error Handling & Secret Redaction Tests
-    # -------------------------------------------------------------------------
-    @patch("smtplib.SMTP")
-    def test_smtp_authentication_error_never_exposes_password(self, mock_smtp_cls):
-        """
-        SMTPAuthenticationError must produce safe error messages without exposing credentials.
-        """
-        mock_server = MagicMock()
-        mock_server.has_extn.return_value = True
-        mock_server.login.side_effect = smtplib.SMTPAuthenticationError(535, b"5.7.8 Username and Password not accepted")
-        mock_smtp_cls.return_value.__enter__.return_value = mock_server
-
-        secret_password = "super-confidential-app-pass-99"
-        with patch.dict(os.environ, {
-            "SMTP_HOST": "smtp.gmail.com",
-            "SMTP_PORT": "587",
-            "SMTP_USERNAME": "user@gmail.com",
-            "SMTP_PASSWORD": secret_password,
-            "FOLLOWUP_EMAIL_TO": "admin@example.com"
-        }):
-            res = email_service.send_email("Subject", "<p>HTML</p>", "Text", "admin@example.com")
-            self.assertFalse(res["success"])
-            self.assertIn("SMTP Authentication failed", res["error"])
-            self.assertNotIn(secret_password, res["error"])
+            self.assertIn("timed out", res["error"])
 
     def test_sanitize_error_string(self):
-        secret_pwd = "my-secret-app-password"
+        secret_key = "re_test_ultra_secret_api_key_888"
         secret_cron = "my-ultra-secret-cron-token"
         with patch.dict(os.environ, {
-            "SMTP_PASSWORD": secret_pwd,
+            "RESEND_API_KEY": secret_key,
             "CRON_SECRET": secret_cron
         }):
-            raw_err = f"Failed connecting with {secret_pwd} and token {secret_cron}"
+            raw_err = f"Failed request with API key {secret_key} and cron {secret_cron}"
             sanitized = email_service.sanitize_error_string(raw_err)
-            self.assertNotIn(secret_pwd, sanitized)
+            self.assertNotIn(secret_key, sanitized)
             self.assertNotIn(secret_cron, sanitized)
             self.assertIn("[REDACTED]", sanitized)
 
     # -------------------------------------------------------------------------
-    # 5. Duplicate Delivery & Concurrency Protection Tests
+    # 4. Duplicate Delivery & Concurrency Protection Tests
     # -------------------------------------------------------------------------
     @patch("email_service.send_email")
     def test_send_daily_followup_email_success(self, mock_send):
-        mock_send.return_value = {"success": True, "error": None}
+        mock_send.return_value = {"success": True, "id": "re_msg_1", "error": None}
         today_str = email_service.get_current_date_strings()[0]
 
         lead = models.Lead(
@@ -282,10 +269,7 @@ class TestEmailService(unittest.TestCase):
         self.db.commit()
 
         with patch.dict(os.environ, {
-            "SMTP_HOST": "smtp.example.com",
-            "SMTP_PORT": "587",
-            "SMTP_USERNAME": "testuser",
-            "SMTP_PASSWORD": "secretpassword",
+            "RESEND_API_KEY": "re_test_key",
             "FOLLOWUP_EMAIL_TO": "admin@example.com",
             "DAILY_FOLLOWUP_EMAIL_ENABLED": "true"
         }):
@@ -320,47 +304,12 @@ class TestEmailService(unittest.TestCase):
         self.db.commit()
 
         with patch.dict(os.environ, {
-            "SMTP_HOST": "smtp.example.com",
-            "SMTP_USERNAME": "testuser",
-            "SMTP_PASSWORD": "secretpassword",
+            "RESEND_API_KEY": "re_test_key",
             "FOLLOWUP_EMAIL_TO": "admin@example.com",
             "DAILY_FOLLOWUP_EMAIL_ENABLED": "true"
         }):
             result = email_service.send_daily_followup_email(self.db)
             self.assertEqual(result["status"], "already_sent")
-            self.assertFalse(mock_send.called)
-
-    @patch("email_service.send_email")
-    def test_concurrent_request_protection_pending_in_progress(self, mock_send):
-        """
-        If another request has claimed the date and is actively PENDING,
-        subsequent requests must receive 'in_progress' and NOT send a duplicate email.
-        """
-        mock_send.return_value = {"success": True, "error": None}
-        today_str = email_service.get_current_date_strings()[0]
-
-        # Insert a recent PENDING log (created 30 seconds ago)
-        pending_log = models.DailyEmailLog(
-            delivery_date=today_str,
-            recipient="admin@example.com",
-            status="PENDING",
-            due_today_count=0,
-            overdue_count=0,
-            sent_at=datetime.utcnow() - timedelta(seconds=30)
-        )
-        self.db.add(pending_log)
-        self.db.commit()
-
-        with patch.dict(os.environ, {
-            "SMTP_HOST": "smtp.example.com",
-            "SMTP_USERNAME": "testuser",
-            "SMTP_PASSWORD": "secretpassword",
-            "FOLLOWUP_EMAIL_TO": "admin@example.com",
-            "DAILY_FOLLOWUP_EMAIL_ENABLED": "true"
-        }):
-            result = email_service.send_daily_followup_email(self.db)
-            self.assertEqual(result["status"], "in_progress")
-            # Must NOT invoke SMTP send while another worker is running!
             self.assertFalse(mock_send.called)
 
     @patch("email_service.send_email")
@@ -380,7 +329,6 @@ class TestEmailService(unittest.TestCase):
         mock_send.side_effect = slow_send
         today_str = email_service.get_current_date_strings()[0]
 
-        # Insert FAILED log
         failed_log = models.DailyEmailLog(
             delivery_date=today_str,
             recipient="admin@example.com",
@@ -397,9 +345,7 @@ class TestEmailService(unittest.TestCase):
 
         def worker(sess):
             with patch.dict(os.environ, {
-                "SMTP_HOST": "smtp.example.com",
-                "SMTP_USERNAME": "testuser",
-                "SMTP_PASSWORD": "secretpassword",
+                "RESEND_API_KEY": "re_test_key",
                 "FOLLOWUP_EMAIL_TO": "admin@example.com",
                 "DAILY_FOLLOWUP_EMAIL_ENABLED": "true"
             }):
@@ -419,7 +365,6 @@ class TestEmailService(unittest.TestCase):
         self.assertEqual(statuses.count("success"), 1)
         self.assertEqual(mock_send.call_count, 1)
 
-        # Final record status in DB must be SUCCESS
         final_log = self.db.query(models.DailyEmailLog).filter_by(delivery_date=today_str).first()
         self.assertEqual(final_log.status, "SUCCESS")
 
@@ -439,7 +384,6 @@ class TestEmailService(unittest.TestCase):
         mock_send.side_effect = slow_send
         today_str = email_service.get_current_date_strings()[0]
 
-        # Insert stale PENDING log (10 minutes old)
         stale_log = models.DailyEmailLog(
             delivery_date=today_str,
             recipient="admin@example.com",
@@ -456,9 +400,7 @@ class TestEmailService(unittest.TestCase):
 
         def worker(sess):
             with patch.dict(os.environ, {
-                "SMTP_HOST": "smtp.example.com",
-                "SMTP_USERNAME": "testuser",
-                "SMTP_PASSWORD": "secretpassword",
+                "RESEND_API_KEY": "re_test_key",
                 "FOLLOWUP_EMAIL_TO": "admin@example.com",
                 "DAILY_FOLLOWUP_EMAIL_ENABLED": "true"
             }):
@@ -482,14 +424,35 @@ class TestEmailService(unittest.TestCase):
         self.assertEqual(final_log.status, "SUCCESS")
 
     @patch("email_service.send_email")
-    def test_send_daily_followup_retry_on_previous_failure(self, mock_send):
-        """
-        If an earlier attempt FAILED, subsequent attempts must be allowed to retry.
-        """
+    def test_concurrent_request_protection_pending_in_progress(self, mock_send):
         mock_send.return_value = {"success": True, "error": None}
         today_str = email_service.get_current_date_strings()[0]
 
-        # Insert a FAILED log for today
+        pending_log = models.DailyEmailLog(
+            delivery_date=today_str,
+            recipient="admin@example.com",
+            status="PENDING",
+            due_today_count=0,
+            overdue_count=0,
+            sent_at=datetime.utcnow() - timedelta(seconds=30)
+        )
+        self.db.add(pending_log)
+        self.db.commit()
+
+        with patch.dict(os.environ, {
+            "RESEND_API_KEY": "re_test_key",
+            "FOLLOWUP_EMAIL_TO": "admin@example.com",
+            "DAILY_FOLLOWUP_EMAIL_ENABLED": "true"
+        }):
+            result = email_service.send_daily_followup_email(self.db)
+            self.assertEqual(result["status"], "in_progress")
+            self.assertFalse(mock_send.called)
+
+    @patch("email_service.send_email")
+    def test_send_daily_followup_retry_on_previous_failure(self, mock_send):
+        mock_send.return_value = {"success": True, "error": None}
+        today_str = email_service.get_current_date_strings()[0]
+
         failed_log = models.DailyEmailLog(
             delivery_date=today_str,
             recipient="admin@example.com",
@@ -502,9 +465,7 @@ class TestEmailService(unittest.TestCase):
         self.db.commit()
 
         with patch.dict(os.environ, {
-            "SMTP_HOST": "smtp.example.com",
-            "SMTP_USERNAME": "testuser",
-            "SMTP_PASSWORD": "secretpassword",
+            "RESEND_API_KEY": "re_test_key",
             "FOLLOWUP_EMAIL_TO": "admin@example.com",
             "DAILY_FOLLOWUP_EMAIL_ENABLED": "true"
         }):
@@ -512,29 +473,24 @@ class TestEmailService(unittest.TestCase):
             self.assertEqual(result["status"], "success")
             self.assertTrue(mock_send.called)
 
-            # Updated status to SUCCESS
             log = self.db.query(models.DailyEmailLog).filter_by(delivery_date=today_str).first()
             self.assertEqual(log.status, "SUCCESS")
 
     @patch("email_service.send_email")
     def test_send_test_email(self, mock_send):
-        mock_send.return_value = {"success": True, "error": None}
+        mock_send.return_value = {"success": True, "id": "re_test_123", "error": None}
 
         with patch.dict(os.environ, {
-            "SMTP_HOST": "smtp.example.com",
-            "SMTP_USERNAME": "testuser",
-            "SMTP_PASSWORD": "secretpassword",
+            "RESEND_API_KEY": "re_test_key",
             "FOLLOWUP_EMAIL_TO": "admin@example.com"
         }):
             result = email_service.send_test_email()
             self.assertEqual(result["status"], "success")
             self.assertIn("Email configuration is working correctly", result["message"])
-
-            # Ensure daily_email_logs has NOT been modified
             self.assertEqual(self.db.query(models.DailyEmailLog).count(), 0)
 
     # -------------------------------------------------------------------------
-    # 6. Cron Endpoint & Public Status API Tests
+    # 5. Cron Endpoint & Public Status API Tests
     # -------------------------------------------------------------------------
     def test_cron_endpoint_auth(self):
         secret = "test-cron-secret-token"
@@ -562,10 +518,10 @@ class TestEmailService(unittest.TestCase):
 
     def test_public_email_status_endpoint(self):
         raw_email = "admin@enterprise.com"
+        secret_key = "re_live_secret_key_888"
         with patch.dict(os.environ, {
-            "SMTP_HOST": "smtp.gmail.com",
-            "SMTP_USERNAME": "intern@leadflow.demo",
-            "SMTP_PASSWORD": "supersecretpassword",
+            "RESEND_API_KEY": secret_key,
+            "EMAIL_FROM": "LeadFlow <onboarding@resend.dev>",
             "CRON_SECRET": "my-cron-key-12345",
             "FOLLOWUP_EMAIL_TO": raw_email,
             "DAILY_FOLLOWUP_EMAIL_ENABLED": "true"
@@ -579,14 +535,14 @@ class TestEmailService(unittest.TestCase):
             self.assertEqual(data["recipient_masked"], "a***n@enterprise.com")
             self.assertEqual(data["scheduled_time"], "8:00 AM Asia/Kolkata")
             self.assertEqual(data["timezone"], "Asia/Kolkata")
+            self.assertEqual(data["provider"], "Resend HTTPS API")
 
             # Must NEVER leak sensitive values or raw recipient
             payload_str = str(data)
             self.assertNotIn("raw_recipient", data)
             self.assertNotIn(raw_email, payload_str)
-            self.assertNotIn("supersecretpassword", payload_str)
+            self.assertNotIn(secret_key, payload_str)
             self.assertNotIn("my-cron-key-12345", payload_str)
-            self.assertNotIn("intern@leadflow.demo", payload_str)
 
     @patch("email_service.send_test_email")
     def test_send_test_email_endpoint(self, mock_test):
