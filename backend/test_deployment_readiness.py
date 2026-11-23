@@ -78,24 +78,44 @@ class TestDeploymentReadiness(unittest.TestCase):
         )
 
     def test_database_url_normalization_logic(self):
-        """Verify PostgreSQL URL conversion and stripping logic"""
+        """Verify PostgreSQL URL conversion and stripping logic uses postgresql+psycopg2"""
         test_cases = [
-            ("postgres://user:pass@host:5432/db", "postgresql://user:pass@host:5432/db"),
-            ("  postgres://user:pass@host:5432/db  ", "postgresql://user:pass@host:5432/db"),
-            ("'postgres://user:pass@host:5432/db'", "postgresql://user:pass@host:5432/db"),
-            ("postgresql://user:pass@host:5432/db", "postgresql://user:pass@host:5432/db"),
+            ("postgres://user:pass@host:5432/db", "postgresql+psycopg2://user:pass@host:5432/db"),
+            ("  postgres://user:pass@host:5432/db  ", "postgresql+psycopg2://user:pass@host:5432/db"),
+            ("'postgres://user:pass@host:5432/db'", "postgresql+psycopg2://user:pass@host:5432/db"),
+            ("postgresql://user:pass@host:5432/db", "postgresql+psycopg2://user:pass@host:5432/db"),
+            ("postgresql+psycopg2://user:pass@host:5432/db", "postgresql+psycopg2://user:pass@host:5432/db"),
+            ("postgresql+psycopg://user:pass@host:5432/db", "postgresql+psycopg2://user:pass@host:5432/db"),
         ]
         for raw, expected in test_cases:
-            cleaned = raw.strip().strip("'\"")
-            if cleaned.startswith("postgres://"):
-                cleaned = cleaned.replace("postgres://", "postgresql://", 1)
-            self.assertEqual(cleaned, expected)
+            normalized = database.normalize_database_url(raw)
+            self.assertEqual(normalized, expected)
+
+    def test_psycopg2_driver_dialect_resolution(self):
+        """Verify that normalized PostgreSQL URL resolves to psycopg2 driver in SQLAlchemy"""
+        from sqlalchemy.engine.url import make_url
+
+        render_urls = [
+            "postgres://leadflow_user:secret@dpg-abcde12345-a:5432/leadflow",
+            "postgresql://leadflow_user:secret@dpg-abcde12345-a.oregon-postgres.render.com/leadflow?sslmode=require"
+        ]
+        for url in render_urls:
+            normalized = database.normalize_database_url(url)
+            self.assertTrue(normalized.startswith("postgresql+psycopg2://"))
+
+            sa_url = make_url(normalized)
+            dialect_cls = sa_url.get_dialect()
+            self.assertEqual(
+                dialect_cls.driver,
+                "psycopg2",
+                f"Expected driver psycopg2 for URL {url}, got {dialect_cls.driver}"
+            )
 
     def test_render_sslmode_detection(self):
         """Verify that Render URLs require sslmode=require"""
-        render_internal = "postgresql://user:pass@dpg-abcde12345-a:5432/leadflow"
-        render_external = "postgresql://user:pass@dpg-abcde12345-a.oregon-postgres.render.com/leadflow"
-        
+        render_internal = "postgresql+psycopg2://user:pass@dpg-abcde12345-a:5432/leadflow"
+        render_external = "postgresql+psycopg2://user:pass@dpg-abcde12345-a.oregon-postgres.render.com/leadflow"
+
         for url in [render_internal, render_external]:
             connect_args = {}
             if "sslmode" not in url:
@@ -125,4 +145,3 @@ class TestDeploymentReadiness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

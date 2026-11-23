@@ -6,16 +6,31 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_SQLITE_PATH = os.path.join(BASE_DIR, "leadflow.db")
 
-# Support environment-configured DATABASE_URL (for deployment on Render, Railway, Fly.io, etc.)
-raw_db_url = os.environ.get("DATABASE_URL", "").strip().strip("'\"")
-if not raw_db_url:
-    SQLALCHEMY_DATABASE_URL = f"sqlite:///{DEFAULT_SQLITE_PATH}"
-else:
-    SQLALCHEMY_DATABASE_URL = raw_db_url
+def normalize_database_url(url: str) -> str:
+    """
+    Normalizes database connection URLs:
+    - Strips whitespace and surrounding quotes
+    - Converts postgres:// and generic postgresql:// to explicit postgresql+psycopg2://
+      dialect to ensure SQLAlchemy loads the installed psycopg2 driver rather than psycopg 3
+    - Falls back to local SQLite if URL is empty
+    """
+    cleaned = (url or "").strip().strip("'\"")
+    if not cleaned:
+        return f"sqlite:///{DEFAULT_SQLITE_PATH}"
 
-# Convert legacy Heroku/Render postgres:// to postgresql:// for SQLAlchemy 2.0+
-if SQLALCHEMY_DATABASE_URL.startswith("postgres://"):
-    SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    # Explicitly map PostgreSQL schemes to postgresql+psycopg2 dialect
+    if cleaned.startswith("postgres://"):
+        return cleaned.replace("postgres://", "postgresql+psycopg2://", 1)
+    elif cleaned.startswith("postgresql://"):
+        return cleaned.replace("postgresql://", "postgresql+psycopg2://", 1)
+    elif cleaned.startswith("postgresql+psycopg://"):
+        return cleaned.replace("postgresql+psycopg://", "postgresql+psycopg2://", 1)
+
+    return cleaned
+
+# Support environment-configured DATABASE_URL (for deployment on Render, Railway, Fly.io, etc.)
+raw_db_url = os.environ.get("DATABASE_URL", "")
+SQLALCHEMY_DATABASE_URL = normalize_database_url(raw_db_url)
 
 # Configure engine appropriately for SQLite vs PostgreSQL / MySQL
 is_sqlite = SQLALCHEMY_DATABASE_URL.startswith("sqlite")
