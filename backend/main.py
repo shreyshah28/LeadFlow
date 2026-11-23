@@ -1,4 +1,11 @@
 import os
+import sys
+
+# Ensure backend directory is in sys.path regardless of working directory
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
 import io
 import csv
 from datetime import datetime, date, timedelta
@@ -8,23 +15,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, desc, asc
+from sqlalchemy import or_, desc, asc, text
 
 import models
 import schemas
 import database
 from database import engine, get_db, SessionLocal, Base, is_sqlite
-
-# Create tables
-Base.metadata.create_all(bind=engine)
-
-# Auto-migrate SQLite on startup if needed
 import migrate_db
-if is_sqlite and hasattr(engine.url, "database") and engine.url.database:
-    try:
-        migrate_db.run_migration(engine.url.database)
-    except Exception:
-        pass
 
 def get_relative_date(offset_days: int) -> str:
     target = date.today() + timedelta(days=offset_days)
@@ -187,21 +184,26 @@ def seed_sample_leads(db_session: Optional[Session] = None):
                 db_lead = models.Lead(**item)
                 db.add(db_lead)
             db.commit()
-            print("Database initialized with 12 sample leads.")
+            print("[Startup] Database initialized with 12 sample leads.")
     finally:
         if should_close:
             db.close()
 
-# Create tables and seed sample leads if empty
-Base.metadata.create_all(bind=engine)
-seed_sample_leads()
-
-# Lifespan handler
+# Lifespan handler for FastAPI
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: ensure tables and seed data
-    Base.metadata.create_all(bind=engine)
-    seed_sample_leads()
+    # Startup: ensure tables and seed data safely
+    try:
+        Base.metadata.create_all(bind=engine)
+        if is_sqlite and hasattr(engine.url, "database") and engine.url.database:
+            try:
+                migrate_db.run_migration(engine.url.database)
+            except Exception as e:
+                print(f"[Startup Warning] SQLite migration skipped/failed: {e}")
+        seed_sample_leads()
+        print("[Startup] Database tables initialized and verified successfully.")
+    except Exception as e:
+        print(f"[Startup Warning] Database initialization deferred or failed: {e}")
     yield
 
 app = FastAPI(
@@ -212,9 +214,26 @@ app = FastAPI(
 )
 
 # CORS configuration
+allowed_origins = [
+    "https://lead-flow-acme-7c28.vercel.app",
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:4173",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:4173",
+]
+env_origins = os.environ.get("ALLOWED_ORIGINS")
+if env_origins:
+    for orig in env_origins.split(","):
+        cleaned = orig.strip()
+        if cleaned and cleaned not in allowed_origins:
+            allowed_origins.append(cleaned)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"^https:\/\/.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -223,9 +242,33 @@ app.add_middleware(
 # -----------------------------------------------------------------------------
 # Root & Health Endpoints
 # -----------------------------------------------------------------------------
+@app.get("/")
+def root_endpoint():
+    return {
+        "status": "ok",
+        "app": "LeadFlow API",
+        "version": "1.0.0",
+        "health": "/api/health",
+        "docs": "/docs"
+    }
+
+@app.get("/health")
 @app.get("/api/health")
-def health_check():
-    return {"status": "ok", "app": "LeadFlow API", "timestamp": datetime.utcnow().isoformat()}
+def health_check(db: Session = Depends(get_db)):
+    db_status = "connected"
+    db_type = "sqlite" if is_sqlite else "postgresql"
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception as e:
+        db_status = f"unhealthy: {str(e)}"
+
+    return {
+        "status": "ok" if "unhealthy" not in db_status else "degraded",
+        "app": "LeadFlow API",
+        "database": db_type,
+        "database_status": db_status,
+        "timestamp": datetime.utcnow().isoformat()
+    }
 
 VALID_STATUSES = {"new": "New", "contacted": "Contacted", "meeting": "Meeting", "won": "Won", "lost": "Lost"}
 
@@ -669,3 +712,8 @@ def reset_sample_leads_endpoint(db: Session = Depends(get_db)):
     seed_sample_leads(db)
     new_count = db.query(models.Lead).count()
     return {"message": "Database reset to initial sample leads successfully", "count": new_count}
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
