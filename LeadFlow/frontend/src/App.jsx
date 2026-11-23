@@ -17,7 +17,6 @@ import { getFollowUpStatus } from './utils/dateUtils';
 import { exportLeadsToCSV } from './utils/csvExport';
 
 const PROFILE_KEY = 'leadflow_profile_v2';
-const THEME_KEY = 'leadflow_theme';
 
 export default function App() {
   // 1. Leads State (SQLite backend is the primary source of truth)
@@ -25,50 +24,16 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [backendConnected, setBackendConnected] = useState(null);
 
-  // 2. Theme State (Light / Dark Mode with persistent localStorage)
-  const [theme, setTheme] = useState(() => {
+  // Enforce Light Mode permanently and clean up any legacy theme storage
+  useEffect(() => {
     try {
-      const saved = localStorage.getItem(THEME_KEY);
-      if (saved === 'dark' || saved === 'light') return saved;
-      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-        return 'dark';
-      }
+      localStorage.removeItem('leadflow_theme');
     } catch {
       // ignore
     }
-    return 'light';
-  });
-
-  const toggleTheme = useCallback(() => {
-    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+    document.documentElement.classList.remove('dark-theme');
+    document.documentElement.setAttribute('data-theme', 'light');
   }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(THEME_KEY, theme);
-    } catch {
-      // ignore
-    }
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark-theme');
-      document.documentElement.setAttribute('data-theme', 'dark');
-    } else {
-      document.documentElement.classList.remove('dark-theme');
-      document.documentElement.setAttribute('data-theme', 'light');
-    }
-  }, [theme]);
-
-  // Optional keyboard shortcut: Ctrl+D toggles theme
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
-        e.preventDefault();
-        toggleTheme();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleTheme]);
 
   // 2. User Profile State (Stored in localStorage for convenience)
   const [userProfile, setUserProfile] = useState(() => {
@@ -315,8 +280,6 @@ export default function App() {
           onToggleMobileSidebar={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
           urgentCount={urgentCount}
           onNavigateUrgent={() => setActiveTab('followups')}
-          theme={theme}
-          onToggleTheme={toggleTheme}
         />
 
         {/* Backend Connection Indicator Bar (Displays if backend is offline) */}
@@ -487,8 +450,6 @@ export default function App() {
         onUpdateProfile={setUserProfile}
         onResetSampleData={handleResetSampleData}
         totalLeadsCount={leads.length}
-        theme={theme}
-        onSetTheme={setTheme}
       />
 
       <ImportCSVModal

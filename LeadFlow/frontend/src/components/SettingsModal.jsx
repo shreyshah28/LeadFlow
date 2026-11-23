@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { User, Bell, Database, RotateCcw, X, Check, Sun, Moon } from 'lucide-react';
+import { User, Bell, Database, RotateCcw, X, Check } from 'lucide-react';
 
 export default function SettingsModal({
   isOpen,
@@ -7,9 +7,7 @@ export default function SettingsModal({
   userProfile,
   onUpdateProfile,
   onResetSampleData,
-  totalLeadsCount,
-  theme,
-  onSetTheme
+  totalLeadsCount
 }) {
   const [name, setName] = useState(userProfile?.name || 'Alex Morgan');
   const [role, setRole] = useState(userProfile?.role || 'Intern / Sales Rep');
@@ -52,7 +50,7 @@ export default function SettingsModal({
         <div className="modal-header">
           <div className="modal-title-group">
             <h2 className="modal-title">Settings & Preferences</h2>
-            <p className="modal-subtitle">Customize user profile, theme, and workspace configuration</p>
+            <p className="modal-subtitle">Customize user profile and workspace configuration</p>
           </div>
           <button
             type="button"
@@ -119,39 +117,6 @@ export default function SettingsModal({
               </button>
             </div>
           </form>
-
-          {/* Theme & Appearance Section */}
-          <div className="settings-section">
-            <div className="section-title-row">
-              {theme === 'dark' ? (
-                <Moon size={16} className="section-icon" />
-              ) : (
-                <Sun size={16} className="section-icon" />
-              )}
-              <h3 className="section-heading">Appearance & Theme</h3>
-            </div>
-
-            <div className="theme-options-grid">
-              <button
-                type="button"
-                className={`theme-option-card ${theme === 'light' ? 'active' : ''}`}
-                onClick={() => onSetTheme && onSetTheme('light')}
-              >
-                <Sun size={20} className="theme-option-icon" />
-                <span className="theme-option-label">Light Mode</span>
-                {theme === 'light' && <span className="theme-active-dot" />}
-              </button>
-              <button
-                type="button"
-                className={`theme-option-card ${theme === 'dark' ? 'active' : ''}`}
-                onClick={() => onSetTheme && onSetTheme('dark')}
-              >
-                <Moon size={20} className="theme-option-icon" />
-                <span className="theme-option-label">Dark Mode</span>
-                {theme === 'dark' && <span className="theme-active-dot" />}
-              </button>
-            </div>
-          </div>
 
           {/* Notifications Preferences */}
           <div className="settings-section">

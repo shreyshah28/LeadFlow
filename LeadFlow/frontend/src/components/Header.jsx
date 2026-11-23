@@ -5,9 +5,7 @@ import {
   Download,
   Upload,
   Calendar,
-  Bell,
-  Sun,
-  Moon
+  Bell
 } from 'lucide-react';
 import { formatHeaderDate } from '../utils/dateUtils';
 
@@ -18,9 +16,7 @@ export default function Header({
   onExportCSV,
   onToggleMobileSidebar,
   urgentCount,
-  onNavigateUrgent,
-  theme,
-  onToggleTheme
+  onNavigateUrgent
 }) {
   const getTabTitle = () => {
     switch (activeTab) {
@@ -73,21 +69,6 @@ export default function Header({
             <Calendar size={15} className="date-icon" />
             <span>{formatHeaderDate()}</span>
           </div>
-
-          {/* Theme Toggle Button (Dark/Light) */}
-          <button
-            type="button"
-            className="theme-toggle-btn"
-            onClick={onToggleTheme}
-            title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-            aria-label={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-          >
-            {theme === 'dark' ? (
-              <Sun size={17} className="theme-icon sun-icon" />
-            ) : (
-              <Moon size={17} className="theme-icon moon-icon" />
-            )}
-          </button>
 
           {/* Follow-up Urgent Bell */}
           <button
